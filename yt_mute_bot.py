@@ -102,19 +102,26 @@ class YTMuteBot:
 
     # -- Browser lifecycle --------------------------------------------------
 
-    def launch(self, playwright, headless: bool):
+    def launch(self, playwright, headless: bool, remote_debug: bool = False):
         profile_dir = self.cfg["browser_profile_dir"]
         os.makedirs(profile_dir, exist_ok=True)
+
+        extra_args = [
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+        ]
+        if remote_debug:
+            extra_args.extend([
+                "--remote-debugging-port=9222",
+                "--remote-debugging-address=0.0.0.0",
+            ])
 
         self.browser = playwright.chromium.launch_persistent_context(
             user_data_dir=profile_dir,
             headless=headless,
             viewport={"width": 1920, "height": 1080},
             locale="en-US",
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-            ],
+            args=extra_args,
         )
         self.page = self.browser.new_page()
         self.page.set_default_timeout(30_000)
@@ -143,6 +150,48 @@ class YTMuteBot:
         else:
             self.log.error(f"Unexpected URL after login: {self.page.url}")
             sys.exit(1)
+
+    def remote_login(self):
+        """Headless login via Chrome remote debugging. No X11/VNC needed."""
+        self.log.info("Opening YouTube Studio for remote login...")
+        self.page.goto(f"{STUDIO_BASE}/", wait_until="networkidle")
+        print()
+        print("=" * 65)
+        print("  REMOTE LOGIN - No VNC or X11 required")
+        print("=" * 65)
+        print()
+        print("  On your workstation, open Chrome and go to:")
+        print()
+        print("      chrome://inspect/#devices")
+        print()
+        print("  Click 'Configure...' and add:")
+        print()
+        print("      <this-server-ip>:9222")
+        print()
+        print("  The YouTube Studio tab will appear under 'Remote Target'.")
+        print("  Click 'inspect' to open a full interactive browser view.")
+        print("  Log into Google, navigate to YouTube Studio.")
+        print()
+        print("  When you see the Studio dashboard, come back here")
+        print("  and press ENTER.")
+        print("=" * 65)
+        print()
+        input("Press ENTER after logging in...")
+        # Reload to pick up any navigation the user did in DevTools
+        try:
+            self.page.reload(wait_until="networkidle")
+            time.sleep(3)
+        except Exception:
+            pass
+        url = self.page.url
+        if "studio.youtube.com" in url:
+            self.log.info("Login successful - session saved to browser profile.")
+        elif "accounts.google.com" in url:
+            self.log.error("Still on Google login page. Try again.")
+            sys.exit(1)
+        else:
+            self.log.warning(f"Ended on: {url}")
+            self.log.info("Session saved. Verify with a normal run.")
 
     # -- Check session validity ---------------------------------------------
 
@@ -486,7 +535,14 @@ def main():
     parser.add_argument(
         "--login",
         action="store_true",
-        help="Run in headed mode for initial Google login.",
+        help="Run in headed mode for initial Google login (needs display).",
+    )
+    parser.add_argument(
+        "--remote-login",
+        action="store_true",
+        dest="remote_login",
+        help="Login via Chrome remote debugging. No display needed. "
+             "Connect from your workstation via chrome://inspect.",
     )
     parser.add_argument(
         "--video",
@@ -504,11 +560,18 @@ def main():
     log.info("=" * 60)
 
     headless = not args.login and cfg.get("headless", True)
+    remote_debug = args.remote_login
 
     with sync_playwright() as pw:
         bot = YTMuteBot(cfg, log)
         try:
-            bot.launch(pw, headless=headless)
+            bot.launch(pw, headless=headless, remote_debug=remote_debug)
+
+            if args.remote_login:
+                bot.remote_login()
+                bot.close()
+                log.info("Login complete. Run without flags from now on.")
+                return
 
             if args.login:
                 bot.interactive_login()
