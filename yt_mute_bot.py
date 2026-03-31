@@ -15,10 +15,13 @@ Subsequent runs: the saved browser profile is reused headlessly.
 """
 
 import argparse
+import json
 import logging
 import os
+import socket
 import sys
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -155,43 +158,101 @@ class YTMuteBot:
         """Headless login via Chrome remote debugging. No X11/VNC needed."""
         self.log.info("Opening YouTube Studio for remote login...")
         self.page.goto(f"{STUDIO_BASE}/", wait_until="networkidle")
+        time.sleep(3)
+
+        # Get the page ID from CDP endpoint
+        page_id = None
+        try:
+            resp = urllib.request.urlopen("http://localhost:9222/json")
+            pages = json.loads(resp.read())
+            for p in pages:
+                if p.get("type") == "page":
+                    page_id = p["id"]
+                    break
+        except Exception as e:
+            self.log.warning(f"Could not query CDP endpoint: {e}")
+
+        # Get this machine's IP
+        server_ip = self._get_local_ip()
+
         print()
-        print("=" * 65)
-        print("  REMOTE LOGIN - No VNC or X11 required")
-        print("=" * 65)
+        print("=" * 70)
+        print("  REMOTE LOGIN")
+        print("=" * 70)
         print()
-        print("  On your workstation, open Chrome and go to:")
+        if page_id:
+            direct_url = (
+                f"http://{server_ip}:9222"
+                f"/devtools/inspector.html"
+                f"?ws={server_ip}:9222/devtools/page/{page_id}"
+            )
+            print("  Paste this URL directly into Edge/Chrome on your workstation:")
+            print()
+            print(f"    {direct_url}")
+            print()
+        else:
+            print(f"  Open this in Edge/Chrome to see available tabs:")
+            print()
+            print(f"    http://{server_ip}:9222")
+            print()
+        print("  You'll see a DevTools inspector with the browser page.")
+        print("  The page view is in the top-right panel.")
+        print("  If it's tiny, click the phone/tablet icon to toggle")
+        print("  device mode, or drag the divider to resize.")
         print()
-        print("      chrome://inspect/#devices")
-        print()
-        print("  Click 'Configure...' and add:")
-        print()
-        print("      <this-server-ip>:9222")
-        print()
-        print("  The YouTube Studio tab will appear under 'Remote Target'.")
-        print("  Click 'inspect' to open a full interactive browser view.")
-        print("  Log into Google, navigate to YouTube Studio.")
-        print()
-        print("  When you see the Studio dashboard, come back here")
+        print("  Log into Google, then navigate to YouTube Studio.")
+        print("  Once you see the Studio dashboard, come back here")
         print("  and press ENTER.")
-        print("=" * 65)
+        print("=" * 70)
         print()
-        input("Press ENTER after logging in...")
-        # Reload to pick up any navigation the user did in DevTools
+        input("Press ENTER after logging in... ")
+
+        # Give cookies time to sync
+        time.sleep(5)
+
+        # Reload to pick up navigation done via DevTools
         try:
             self.page.reload(wait_until="networkidle")
-            time.sleep(3)
+            time.sleep(5)
         except Exception:
             pass
+
+        # Log cookie state
+        cookies = self.browser.cookies()
+        yt_cookies = [c["name"] for c in cookies
+                      if "youtube" in c.get("domain", "")
+                      or "google" in c.get("domain", "")]
+        self.log.info(f"Cookies captured: {len(yt_cookies)} google/youtube cookies")
+
         url = self.page.url
-        if "studio.youtube.com" in url:
+        self.log.info(f"Final URL: {url}")
+
+        if "studio.youtube.com" in url and "/channel/" in url:
             self.log.info("Login successful - session saved to browser profile.")
-        elif "accounts.google.com" in url:
-            self.log.error("Still on Google login page. Try again.")
+        elif "accounts.google.com" in url or len(yt_cookies) < 5:
+            self.log.error(
+                "Login does not appear complete. "
+                f"URL: {url}, cookies: {len(yt_cookies)}"
+            )
+            self.log.error("Try again — make sure you fully log in before pressing Enter.")
             sys.exit(1)
+        elif "studio.youtube.com" in url:
+            self.log.info("Login successful - session saved to browser profile.")
         else:
             self.log.warning(f"Ended on: {url}")
-            self.log.info("Session saved. Verify with a normal run.")
+            self.log.warning("Session may not be valid. Test with a normal run.")
+
+    @staticmethod
+    def _get_local_ip() -> str:
+        """Get this machine's LAN IP address."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "<this-server-ip>"
 
     # -- Check session validity ---------------------------------------------
 
@@ -199,11 +260,18 @@ class YTMuteBot:
         """Navigate to Studio and confirm we're still logged in."""
         self.log.info("Verifying YouTube Studio session...")
         self.page.goto(f"{STUDIO_BASE}/", wait_until="networkidle")
-        time.sleep(3)
+        time.sleep(5)
         url = self.page.url
+        self.log.info(f"Landed on: {url}")
+
+        # Also log cookies for debugging
+        cookies = self.browser.cookies()
+        yt_cookies = [c["name"] for c in cookies if "youtube" in c.get("domain", "") or "google" in c.get("domain", "")]
+        self.log.info(f"Session cookies found: {len(yt_cookies)}")
+
         if "accounts.google.com" in url or "signin" in url.lower():
             self.log.error(
-                "Session expired - re-run with --login to re-authenticate."
+                "Session expired - re-run with --remote-login to re-authenticate."
             )
             return False
         if "studio.youtube.com" in url:
