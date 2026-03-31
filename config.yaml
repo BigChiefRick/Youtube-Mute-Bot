@@ -1,0 +1,31 @@
+# yt-mute-bot configuration
+# ---------------------------
+
+# Your YouTube channel ID (from your Studio URL)
+channel_id: "UCLS7oGzsUvVXvJHW2O7F6ig"
+
+# Browser profile directory — stores your Google login session
+# First run: the bot opens a HEADED browser so you can log in manually.
+# Subsequent runs: reuses the saved session headlessly.
+browser_profile_dir: "/opt/yt-mute-bot/browser-profile"
+
+# How often (seconds) to poll YouTube Studio while waiting for
+# a mute job to finish processing. 300 = 5 minutes.
+poll_interval_seconds: 300
+
+# Maximum time (seconds) to wait for a single mute job before
+# giving up and moving on. 14400 = 4 hours.
+max_wait_per_claim_seconds: 14400
+
+# Maximum number of claims to process per run.
+# Set to 0 for unlimited (process all claims on all flagged videos).
+max_claims_per_run: 0
+
+# Log file path
+log_file: "/var/log/yt-mute-bot/yt-mute-bot.log"
+
+# Screenshot directory — saves a screenshot on errors for debugging
+screenshot_dir: "/var/log/yt-mute-bot/screenshots"
+
+# Headless mode. Set to false for first-run login or debugging.
+headless: true
